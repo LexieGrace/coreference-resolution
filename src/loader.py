@@ -44,13 +44,14 @@ class Corpus:
 
 
 class Document:
-    def __init__(self, raw_text, tokens, corefs, speakers, genre, filename):
+    def __init__(self, raw_text, tokens, corefs, speakers, genre, filename, sents_ends):
         self.raw_text = raw_text
         self.tokens = tokens
         self.corefs = corefs
         self.speakers = speakers
         self.genre = genre
         self.filename = filename
+        self.sents_ends = sents_ends
 
         # Filled in at evaluation time.
         self.tags = None
@@ -67,15 +68,9 @@ class Document:
 
     @cached_property
     def sents(self):
-        """ Regroup raw_text into sentences """
-
-        # Get sentence boundaries
-        sent_idx = [idx+1
-                    for idx, token in enumerate(self.tokens)
-                    if token in ['.', '?', '!']]
-
-        # Regroup (returns list of lists)
-        return [self.tokens[i1:i2] for i1, i2 in pairwise([0] + sent_idx)]
+        """Regroup raw_text into sentences for encoding"""
+        #Regroup (returns list of lists)
+        return [self.tokens[i1:i2] for i1, i2 in pairwise([0] + self.sents_ends)]
 
     def spans(self):
         """ Create Span object for each span """
@@ -241,6 +236,8 @@ def load_file(filename):
     with io.open(filename, 'rt', encoding='utf-8', errors='strict') as f:
         raw_text, tokens, text, utts_corefs, utts_speakers, corefs, index = [], [], [], [], [], [], 0
         genre = filename.split('/')[6]
+        #@alexa: so that the sentences are able to load better for document encoding
+        sents_ends = []
         for line in f:
             raw_text.append(line)
             cols = line.split()
@@ -250,16 +247,22 @@ def load_file(filename):
                 if text:
                     tokens.extend(text), utts_corefs.extend(corefs), utts_speakers.extend([speaker]*len(text))
                     text, corefs = [], []
+                    sents_ends.append(len(tokens))
                     continue
+            
+            # Beginning of Document, beginning of file => nothing to scrape off
+            elif cols[0] == '#begin':
+              continue
 
             # End of document: organize the data, append to output, reset variables for next document.
             elif len(cols) == 2:
-                doc = Document(raw_text, tokens, utts_corefs, utts_speakers, genre, filename)
+                doc = Document(raw_text, tokens, utts_corefs, utts_speakers, genre, filename, sents_ends)
                 documents.append(doc)
                 raw_text, tokens, text, utts_corefs, utts_speakers, index = [], [], [], [], [], 0
-
+                sents_ends = []
+                
             # Inside an utterance: grab text, speaker, coreference information.
-            elif len(cols) > 7:
+            else:
                 text.append(clean_token(cols[3]))
                 speaker = cols[9]
 
@@ -288,10 +291,6 @@ def load_file(filename):
                                               'span': (corefs[i]['start'], index)})
 
                 index += 1
-            else:
-
-                # Beginning of Document, beginning of file, end of file: nothing to scrape off
-                continue
 
     return documents
 
