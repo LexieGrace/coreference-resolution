@@ -11,6 +11,7 @@ from boltons.iterutils import pairwise
 from cached_property import cached_property
 
 from utils import *
+from collections import Counter 
 
 NORMALIZE_DICT = {"/.": ".", "/?": "?",
                   "-LRB-": "(", "-RRB-": ")",
@@ -18,6 +19,36 @@ NORMALIZE_DICT = {"/.": ".", "/?": "?",
                   "-LSB-": "[", "-RSB-": "]"}
 REMOVED_CHAR = ["/", "%", "*"]
 
+def count_corefs(coref_list):
+    """Input: @alexandra:
+        coref_list: a list of dictionaries. Each dictionary contains 3 
+        elements; the label, span, start_idx and end_index of
+        a particular markable. Eg: 
+        {'label': 'R0', 'start': 3, 'end': 5, 'span': (3, 5)}
+     Returns:
+        labels: a dictionary whose keys are labels and values are the number
+        of mentions that have that label.
+    """
+    labels = Counter()
+    for ment_dict in coref_list:
+        labels[ment_dict['label']] += 1
+    return labels
+
+def remove_singletons(coref_list):
+    """Input: @alexandra:  I'm sure there's a better way to do this.
+        coref_list: a list of dictionaries. Each dictionary contains 3 
+            elements; the label, span, start_idx and end_index of
+            a particular markable. Eg: 
+            {'label': 'R0', 'start': 3, 'end': 5, 'span': (3, 5)}
+    Returns:
+        a similar list with only mentions that are part of coreference
+            chains.
+    """
+    all_mentions = count_corefs(coref_list)
+    non_singletons = [k for k, v in all_mentions.items() if v > 1]
+    coreferent_mentions = [ment_dict for ment_dict in coref_list 
+                           if ment_dict['label'] in non_singletons]
+    return coreferent_mentions
 
 class Corpus:
     def __init__(self, documents):
@@ -77,16 +108,39 @@ class Document:
         return [Span(i1=i[0], i2=i[-1], id=idx,
                     speaker=self.speaker(i), genre=self.genre)
                 for idx, i in enumerate(compute_idx_spans(self.sents))]
-
+      
+    def _get_truncated_corefs(self, trunc_start, new_len_tokens):
+        # remove the corefs that are not part of the truncated documents
+        # TODO: it might mean that now you have singletons, you need to remove them
+        trunc_corefs = [coref for coref in self.corefs if coref['end'] > trunc_start]
+        # adjust the indices of the spans to reflect this new sentence lenghts
+        for cor in trunc_corefs:
+            cor['start'] = cor['start'] - trunc_start
+            cor['end'] = cor['end'] - trunc_start
+            cor['span'] = (cor['start'], cor['end'])
+        trunc_corefs = [coref for coref in trunc_corefs if coref['start'] < new_len_toks]
+        return remove_singletons(trunc_corefs)
+      
     def truncate(self, MAX=50):
-        """ Randomly truncate the document to up to MAX sentences """
+        """Randomly truncate the document to MAX sentences.
+        ??alexandra shouldn't it have been up to MAX i.e anywhere from 0 to MAX?
+        """
         if len(self.sents) > MAX:
-            i = random.sample(range(MAX, len(self.sents)), 1)[0]
-            tokens = flatten(self.sents[i-MAX:i])
-            return self.__class__(c(self.raw_text), tokens,
-                                  c(self.corefs), c(self.speakers),
-                                  c(self.genre), c(self.filename))
-        return self
+        # i is a number between 50 and len(sents)
+        i = random.sample(range(MAX, len(self.sents)), 1)[0]
+        # if i = 53 for example, select sentences 3 to 53
+        trunc_sents = self.sents[i-MAX:i] 
+        trunc_sent_ends = [len(s) for s in trunc_sents]
+        discarded_sents = self.sents[:i-MAX]
+        trunc_tokens = flatten(trunc_sents)
+        # the index in the full lenght token where the truncated tokens start
+        trunc_toks_start = len(flatten(discarded_sents))
+        trunc_speakers = self.speakers[trunc_toks_start: len(trunc_tokens)) + truncated_tok_starts]
+        trunc_corefs = self._get_truncated_coref(trunc_tok_starts, len(trunc_tokens))
+        # raw_text is not truncated since it's only used for prediction
+        return self.__class__(self.raw_text, trunc_tokens, trunc_corefs, trunc_speakers,
+                              c(self.genre), c(self.filename), c(trunc_sent_ends))
+    return self
 
     def speaker(self, i):
         """ Compute speaker of a span """
